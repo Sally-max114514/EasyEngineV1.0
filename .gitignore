@@ -1,0 +1,29 @@
+# Python
+__pycache__/
+*.py[cod]
+
+# Virtual environments
+.venv/
+venv/
+
+# Build and test artifacts
+build/
+dist/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local configuration and credentials
+/config/platform.txt
+.env
+.env.*
+!.env.example
+
+# Runtime saves and thumbnails
+/saves/*.json
+/saves/*.png
+
+# Operating system files
+.DS_Store
+Thumbs.db

@@ -1,0 +1,125 @@
+{
+  "title": "放学后的约定",
+  "start": "classroom",
+  "characters": {
+    "yuki": {"name": "雪乃", "color": "#8ecae6"},
+    "me": {"name": "我", "color": "#f4a261"}
+  },
+  "vars": {
+    "affection.yuki": 0,
+    "flags.met_yuki": false,
+    "route": ""
+  },
+  "scenes": {
+    "classroom": {
+      "background": "image/bg/classroom.png",
+      "bgm": "audio/bgm/daily.mp3",
+      "lines": [
+        {"text": "放学后的教室只剩下夕阳和翻书声。"},
+        {
+          "speaker": "yuki",
+          "text": "你还没走呀。",
+          "se": "audio/se/click.wav",
+          "show": [
+            {
+              "id": "yuki",
+              "image": "image/characters/yuki/normal.png",
+              "position": "center"
+            }
+          ],
+          "set": {"flags.met_yuki": true}
+        },
+        {"speaker": "me", "text": "嗯，正准备收拾东西。"},
+        {
+          "speaker": "yuki",
+          "text": "那……要不要一起回去？",
+          "choices": [
+            {
+              "text": "好啊，一起走吧。",
+              "add": {"affection.yuki": 2},
+              "set": {"route": "walk"},
+              "goto": "walk_home"
+            },
+            {
+              "text": "抱歉，我还有事。",
+              "set": {"route": "alone"},
+              "goto": "alone"
+            }
+          ]
+        }
+      ]
+    },
+    "walk_home": {
+      "background": "image/bg/sunset.png",
+      "bgm": "audio/bgm/warm.mp3",
+      "lines": [
+        {
+          "speaker": "yuki",
+          "text": "今天的晚霞真好看。",
+          "show": [
+            {
+              "id": "yuki",
+              "image": "image/characters/yuki/smile.png",
+              "position": "right"
+            }
+          ]
+        },
+        {
+          "text": "我们并肩走在回家的路上。",
+          "choices": [
+            {
+              "text": "牵住她的手。",
+              "require": {"affection.yuki": {"op": ">=", "value": 2}},
+              "add": {"affection.yuki": 1},
+              "goto": "ending_true"
+            },
+            {
+              "text": "安静地陪她走。",
+              "goto": "ending_good"
+            }
+          ]
+        }
+      ]
+    },
+    "alone": {
+      "background": "image/bg/classroom.png",
+      "lines": [
+        {
+          "speaker": "yuki",
+          "text": "这样啊……那明天见。",
+          "hide": ["yuki"]
+        },
+        {"text": "教室里只剩下我一个人。"}
+      ],
+      "next": "ending_normal"
+    },
+    "ending_true": {
+      "lines": [
+        {
+          "speaker": "yuki",
+          "text": "……谢谢你今天陪我。",
+          "show": [
+            {
+              "id": "yuki",
+              "image": "image/characters/yuki/smile.png",
+              "position": "center"
+            }
+          ]
+        },
+        {"speaker": "me", "text": "明天也一起回去吧。"},
+        {"text": "—— 真结局 · 两个人的归途 ——", "end": true}
+      ]
+    },
+    "ending_good": {
+      "lines": [
+        {"text": "夕阳把两个人的影子拉得很长。"},
+        {"text": "—— 好结局 · 并肩而行 ——", "end": true}
+      ]
+    },
+    "ending_normal": {
+      "lines": [
+        {"text": "—— 普通结局 · 明天见 ——", "end": true}
+      ]
+    }
+  }
+}
