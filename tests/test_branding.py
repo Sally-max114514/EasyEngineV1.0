@@ -20,7 +20,7 @@ class BrandingTests(unittest.TestCase):
         self.assertEqual(__author__, "Sally-max114514")
         self.assertEqual(
             __github__,
-            "https://github.com/Sally-max114514/EasyEngineBeta3",
+            "https://github.com/Sally-max114514/EasyEngineV1.0",
         )
         self.assertEqual(__github_profile__, "https://github.com/Sally-max114514")
         self.assertEqual(__version__, "1.0.0 (MIT License)")

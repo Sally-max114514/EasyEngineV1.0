@@ -84,7 +84,7 @@ python -m venv .venv
 ## 2. 项目结构
 
 ```text
-EasyEngineBeta3/
+EasyEngineV1.0/
 ├── main.py                         # 启动入口与 CLI
 ├── export_game.py                  # 单文件游戏打包脚本
 ├── README.md                       # 本文档
@@ -102,7 +102,7 @@ EasyEngineBeta3/
 │   └── other/                      # 未识别的扩展名
 ├── config/
 │   └── platform.txt                # 启动时自动写入
-├── EasyEngineBeta3/
+├── easyengine/
 │   ├── config.py                   # 路径与资源分类常量
 │   ├── resources.py                # 资源扫描、查找、读取
 │   ├── selfcheck.py                # 启动自检
