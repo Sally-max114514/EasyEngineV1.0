@@ -10,9 +10,15 @@ from typing import Any
 
 import pygame
 
-from ..config import ASSETS_DIR, SAVE_DIR
-from ..galgame.engine import AssetRef, GalgameEngine, GameEvent, StepResult
-from ..galgame.script import Story, Transition
+from ..config import SAVE_DIR
+from ..galgame.engine import (
+    AssetRef,
+    GalgameEngine,
+    GameEvent,
+    StepResult,
+    assets_root_for_story,
+)
+from ..galgame.script import ScriptError, Story, Transition
 from ..resources import AssetCatalog, GroupedResources
 from .audio import AsyncAudioLoader
 from .favorites import FavoriteStoreError, VoiceFavorite, VoiceFavoriteStore
@@ -23,6 +29,15 @@ from .states import TitleState
 _AUDIO_EXTENSIONS = frozenset(
     {"mp3", "wav", "ogg", "flac", "m4a", "aac", "wma", "opus"}
 )
+
+
+def _create_asset_catalog(
+    root: str | Path,
+    resources: GroupedResources | None = None,
+) -> AssetCatalog:
+    if resources is None and not Path(root).is_dir():
+        resources = {}
+    return AssetCatalog(root, resources=resources)
 
 
 class PygameApplication:
@@ -99,6 +114,10 @@ class PygameApplication:
         slug = slug or "story"
         return self._base_save_dir / f"{slug}-{self._story_identity(story)[:12]}"
 
+    @staticmethod
+    def _window_caption(story: Story) -> str:
+        return f"{story.title} | Powered by EasyEngine"
+
     def _create_engine(self, story: Story) -> GalgameEngine:
         return GalgameEngine(
             story,
@@ -108,13 +127,59 @@ class PygameApplication:
         )
 
     def select_story(self, story: Story) -> None:
+        if story.source_path is not None:
+            assets_root = assets_root_for_story(story)
+            if assets_root.resolve() != self.catalog.root.resolve():
+                self.catalog = _create_asset_catalog(assets_root)
+                self.renderer.catalog = self.catalog
+                self.renderer.assets.catalog = self.catalog
+                self.renderer.assets.clear()
+                if self.audio is not None:
+                    self.audio.catalog = self.catalog
         self.story = story
         self.save_dir = self._save_dir_for_story(story)
         self.engine = self._create_engine(story)
         self.renderer.story = story
         self.renderer.invalidate_full()
-        pygame.display.set_caption(f"EasyEngine - {story.title}")
+        pygame.display.set_caption(self._window_caption(story))
         self._preload_story_audio()
+
+    def reload_script(self) -> StepResult:
+        """Reload the selected file-backed story and refresh its runtime view."""
+        if self.story.source_path is None:
+            return self.engine.reload_script()
+
+        self.catalog = _create_asset_catalog(self.catalog.root)
+        self.engine.asset_catalog = self.catalog
+        self.engine.resources = self.catalog.resources
+        self.engine.assets_root = self.catalog.root
+        self.renderer.catalog = self.catalog
+        self.renderer.assets.catalog = self.catalog
+        self.renderer.assets.clear()
+        if self.audio is not None:
+            self.audio.catalog = self.catalog
+
+        was_primary_story = (
+            self._story_identity(self.story) == self._primary_story_id
+        )
+        result = self.engine.reload_script()
+        self.story = self.engine.story
+        other_stories = tuple(
+            story
+            for story in self.stories
+            if story.source_path != self.story.source_path
+        )
+        self.stories = self._unique_stories(self.story, other_stories)
+        if was_primary_story:
+            self._primary_story_id = self._story_identity(self.story)
+        self.save_dir = self._save_dir_for_story(self.story)
+        self.engine.save_dir = self.save_dir
+        self.renderer.story = self.story
+        self.renderer.invalidate_full()
+        pygame.display.set_caption(self._window_caption(self.story))
+        self.process_step(result)
+        self._preload_story_audio()
+        return result
 
     def latest_save_slot(self) -> str | None:
         saves = self.engine.list_saves()
@@ -266,7 +331,7 @@ class PygameApplication:
 def run_window(
     story: Story,
     *,
-    assets_root: str | Path = ASSETS_DIR,
+    assets_root: str | Path | None = None,
     resources: GroupedResources | None = None,
     save_dir: str | Path = SAVE_DIR,
     stories: Sequence[Story] = (),
@@ -275,22 +340,23 @@ def run_window(
 ) -> int:
     """Initialize Pygame, run the desktop application, and release resources."""
     audio: AsyncAudioLoader | None = None
+    root = Path(assets_root) if assets_root is not None else assets_root_for_story(story)
     try:
         pygame.mixer.pre_init(frequency=44100, size=-16, channels=2, buffer=1024)
         pygame.init()
         screen = pygame.display.set_mode(size, pygame.RESIZABLE)
-        pygame.display.set_caption(f"EasyEngine - {story.title}")
+        pygame.display.set_caption(PygameApplication._window_caption(story))
 
         try:
             if not pygame.mixer.get_init():
                 pygame.mixer.init(frequency=44100, size=-16, channels=2, buffer=1024)
             pygame.mixer.set_num_channels(16)
             pygame.mixer.set_reserved(1)
-            catalog = AssetCatalog(assets_root, resources=resources)
+            catalog = _create_asset_catalog(root, resources)
             audio = AsyncAudioLoader(catalog)
         except pygame.error as exc:
             print(f"音频设备不可用，将以静音模式运行：{exc}")
-            catalog = AssetCatalog(assets_root, resources=resources)
+            catalog = _create_asset_catalog(root, resources)
 
         app = PygameApplication(
             story,
@@ -311,6 +377,9 @@ def run_window(
         return app.run()
     except pygame.error as exc:
         print(f"桌面窗口运行失败：{exc}")
+        return 1
+    except ScriptError as exc:
+        print(f"剧本运行失败：{exc}")
         return 1
     finally:
         try:

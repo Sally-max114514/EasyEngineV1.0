@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import copy
+import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -15,7 +16,15 @@ from typing import Any, Mapping
 from ..config import ASSETS_DIR, SAVE_DIR
 from ..resources import AssetCatalog, GroupedResources, find_resource, scan_assets
 from .expressions import ExpressionError, evaluate_expression
-from .script import JSONValue, Line, Story, Transition, VariableChange
+from .script import (
+    JSONValue,
+    Line,
+    ScriptError,
+    Story,
+    Transition,
+    VariableChange,
+    load_script,
+)
 from .state import (
     GameState,
     SaveError,
@@ -26,7 +35,22 @@ from .state import (
 )
 from .text import TextTyper
 
-_MAX_TRANSITIONS = 100
+_MAX_CONSECUTIVE_JUMPS = 100
+_JUMP_LOOP_ERROR = "检测到可能的死循环跳转，请检查剧本的 goto/next 逻辑"
+logger = logging.getLogger(__name__)
+
+
+def assets_root_for_story(story: Story) -> Path:
+    """Infer the asset directory associated with a file-backed story."""
+    source_path = story.source_path
+    if source_path is None:
+        return ASSETS_DIR
+
+    source_path = source_path.resolve()
+    for parent in source_path.parents:
+        if parent.name.casefold() == "assets":
+            return parent
+    return source_path.parent / "assets"
 
 
 class EngineError(RuntimeError):
@@ -115,7 +139,7 @@ class GalgameEngine:
         self,
         story: Story,
         *,
-        assets_root: str | Path = ASSETS_DIR,
+        assets_root: str | Path | None = None,
         resources: GroupedResources | None = None,
         asset_catalog: AssetCatalog | None = None,
         save_dir: str | Path = SAVE_DIR,
@@ -124,8 +148,16 @@ class GalgameEngine:
         if asset_catalog is not None and resources is not None:
             raise ValueError("asset_catalog 与 resources 不能同时传入")
         self.asset_catalog = asset_catalog
+        self._assets_root_explicit = assets_root is not None or asset_catalog is not None
+        self._scan_resources_on_reload = resources is None and asset_catalog is None
         self.assets_root = (
-            asset_catalog.root if asset_catalog is not None else Path(assets_root)
+            asset_catalog.root
+            if asset_catalog is not None
+            else (
+                Path(assets_root).absolute()
+                if assets_root is not None
+                else assets_root_for_story(story)
+            )
         )
         self.save_dir = Path(save_dir)
         if asset_catalog is not None:
@@ -137,14 +169,16 @@ class GalgameEngine:
         self.state: GameState | None = None
         self.typer: TextTyper | None = None
         self._line: Line | None = None
-        self._transitions = 0
+        self.jump_count = 0
         self._history: list[_HistorySnapshot] = []
         self._read_history: set[str] = set()
+        self._reported_missing_assets: set[str] = set()
 
     def _scan_resources(self) -> GroupedResources:
         try:
             return scan_assets(self.assets_root)
-        except FileNotFoundError:
+        except FileNotFoundError as exc:
+            logger.error("资源目录不可用：%s（%s）", self.assets_root, exc)
             return {}
 
     def resolve_asset(self, name: str | None) -> AssetRef | None:
@@ -159,7 +193,14 @@ class GalgameEngine:
             )
             return AssetRef(name, path)
         except FileNotFoundError:
+            key = name.casefold()
+            if key not in self._reported_missing_assets:
+                logger.error("资源缺失：%s（资源目录：%s）", name, self.assets_root)
+                self._reported_missing_assets.add(key)
             return AssetRef(name, None)
+        except ValueError as exc:
+            logger.error("资源路径无效：%s（%s）", name, exc)
+            raise
 
     def missing_assets(self) -> tuple[str, ...]:
         """列出剧本引用但 assets/ 中不存在的资源。"""
@@ -174,8 +215,10 @@ class GalgameEngine:
         """从起始场景（或指定场景）开始，重置全部运行时状态。"""
         target = scene_id or self.story.start
         if target not in self.story.scenes:
+            logger.error("起始场景不存在：%s", target)
             raise EngineStateError(f"场景不存在：{target!r}")
 
+        logger.info("开始剧本《%s》，场景：%s", self.story.title, target)
         events: list[GameEvent] = []
         self.state = GameState(
             scene_id=target,
@@ -184,10 +227,35 @@ class GalgameEngine:
         )
         self.typer = None
         self._line = None
-        self._transitions = 0
+        self.jump_count = 0
         self._history.clear()
         self._enter_scene(target, events)
         return StepResult(tuple(events), self.view)
+
+    def reload_script(self) -> StepResult:
+        """Reload the source JSON and reset the runtime to its starting scene."""
+        source_path = self.story.source_path
+        if source_path is None:
+            message = "当前剧本不是从文件加载的，无法重新加载"
+            logger.error(message)
+            raise EngineStateError(message)
+
+        try:
+            story = load_script(source_path)
+        except ScriptError as exc:
+            logger.error("重新加载剧本失败：%s", exc)
+            raise
+
+        self.story = story
+        if not self._assets_root_explicit:
+            self.assets_root = assets_root_for_story(story)
+        if self._scan_resources_on_reload:
+            self.resources = self._scan_resources()
+        self._reported_missing_assets.clear()
+        self._read_history.clear()
+        self.jump_count = 0
+        logger.info("已重新加载剧本《%s》", story.title)
+        return self.start()
 
     def advance(self) -> StepResult:
         """显示完整当前行；已完整时推进到下一行或下一场景。"""
@@ -211,15 +279,16 @@ class GalgameEngine:
             return StepResult(tuple(events), self.view)
 
         if line.choices:
+            logger.error("当前台词包含选项，不能直接推进")
             raise EngineStateError("当前行有选项，请调用 choose(index)")
 
         self._mark_current_line_seen()
         self._remember_current()
-        self._transitions = 0
         events = []
         if line.end:
             self._end_game(events)
         elif line.goto is not None:
+            self._record_jump(line.goto)
             self._enter_scene(line.goto, events)
         else:
             self._show_line(state.line_index + 1, events)
@@ -229,9 +298,11 @@ class GalgameEngine:
         """选择一个选项；index 是 GameView.choices 中的原始下标。"""
         state = self._require_state()
         if state.ended:
+            logger.error("剧本已结束，不能选择选项")
             raise EngineStateError("剧本已经结束")
         line = self._line
         if line is None or not line.choices:
+            logger.error("当前台词没有可选分支")
             raise EngineStateError("当前行没有选项")
         if isinstance(index, bool) or not isinstance(index, int):
             raise TypeError("选项下标必须是整数")
@@ -240,9 +311,9 @@ class GalgameEngine:
 
         choice = line.choices[index]
         if not choice.available(state.variables):
+            logger.error("选项条件未满足：%s", choice.text)
             raise ChoiceUnavailableError(f"选项尚未解锁：{choice.text}")
 
-        self._transitions = 0
         if self.typer is not None and not self.typer.is_complete:
             self.typer.reveal_all()
         self._mark_current_line_seen()
@@ -253,6 +324,7 @@ class GalgameEngine:
         ]
         self._apply_changes(choice.changes, events)
         if choice.goto is not None:
+            self._record_jump(choice.goto)
             self._enter_scene(choice.goto, events)
         else:
             self._show_line(state.line_index + 1, events)
@@ -304,8 +376,6 @@ class GalgameEngine:
             raise EngineStateError("回滚记录指向无效的剧情位置")
         self._line = scene.lines[state.line_index]
         self.typer = TextTyper(self._line.text, snapshot.visible_chars)
-        self._transitions = 0
-
         scene_transition = self.story.scenes[state.scene_id].transition
         events = [
             GameEvent("rollback", {"steps": steps}),
@@ -439,7 +509,7 @@ class GalgameEngine:
             self.typer = TextTyper(self._line.text)
 
         self.state = state
-        self._transitions = 0
+        self.jump_count = 0
         self._history.clear()
         self._read_history.update(state.seen_lines)
 
@@ -485,12 +555,10 @@ class GalgameEngine:
         state = self._require_state()
         scene = self.story.scenes.get(scene_id)
         if scene is None:
+            logger.error("跳转目标场景不存在：%s", scene_id)
             raise EngineStateError(f"场景不存在：{scene_id!r}")
 
-        self._transitions += 1
-        if self._transitions > _MAX_TRANSITIONS:
-            raise EngineStateError("场景连续切换次数过多，剧本可能存在循环")
-
+        logger.info("进入场景：%s", scene_id)
         state.scene_id = scene_id
         state.line_index = 0
         state.ended = False
@@ -521,6 +589,7 @@ class GalgameEngine:
         self._line = line
         self._apply_line(line, events)
         self.typer = TextTyper(line.text)
+        logger.info("显示台词：场景 %s，第 %s 行", state.scene_id, index)
         if not line.text:
             self._mark_current_line_seen()
         events.append(self._line_event(line))
@@ -529,12 +598,27 @@ class GalgameEngine:
         state = self._require_state()
         scene = self.story.scenes[state.scene_id]
         if scene.next is not None:
+            self._record_jump(scene.next)
             self._enter_scene(scene.next, events)
             return
         self._end_game(events)
 
+    def _record_jump(self, target: str) -> None:
+        state = self._require_state()
+        self.jump_count += 1
+        if self.jump_count > _MAX_CONSECUTIVE_JUMPS:
+            logger.error("%s；当前场景 ID：%s", _JUMP_LOOP_ERROR, state.scene_id)
+            raise ScriptError(_JUMP_LOOP_ERROR)
+        logger.info(
+            "剧情跳转：%s -> %s（连续无台词跳转 %s 次）",
+            state.scene_id,
+            target,
+            self.jump_count,
+        )
+
     def _end_game(self, events: list[GameEvent]) -> None:
         state = self._require_state()
+        logger.info("剧本结束：场景 %s", state.scene_id)
         state.ended = True
         if self.typer is not None:
             self.typer.reveal_all()
@@ -592,7 +676,9 @@ class GalgameEngine:
         for key, expression in changes.add_expressions.items():
             value = self._evaluate_change(key, expression, state)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
-                raise EngineError(f"变量 {key!r} 的 add_expr 必须计算出数字")
+                message = f"变量 {key!r} 的 add_expr 必须计算出数字"
+                logger.error(message)
+                raise EngineError(message)
             changed[key] = state.add(key, value)
         if changed:
             events.append(GameEvent("variables", {"values": dict(changed)}))
@@ -606,6 +692,12 @@ class GalgameEngine:
         try:
             return evaluate_expression(expression, state.variables)
         except ExpressionError as exc:
+            logger.error(
+                "变量 %r 的表达式运行失败：%r（%s）",
+                key,
+                expression,
+                exc,
+            )
             raise EngineError(
                 f"变量 {key!r} 的表达式运行失败：{expression!r}（{exc}）"
             ) from exc
@@ -656,6 +748,7 @@ class GalgameEngine:
 
     def _line_event(self, line: Line) -> GameEvent:
         state = self._require_state()
+        self.jump_count = 0
         return GameEvent(
             "line",
             {

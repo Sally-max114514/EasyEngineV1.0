@@ -11,6 +11,7 @@ from .engine import (
     GameView,
     SpriteView,
     StepResult,
+    assets_root_for_story,
 )
 from .script import (
     Character,
@@ -65,6 +66,7 @@ __all__ = [
     "TextTyper",
     "Transition",
     "VariableChange",
+    "assets_root_for_story",
     "load_script",
     "parse_story",
 ]

@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
 
+from .. import __author__
 from .script import JSONScalar, JSONValue, SPRITE_POSITIONS
 
 SAVE_VERSION = 2
@@ -200,6 +201,8 @@ def save_game(
         raise SaveError(f"存档目录无法创建：{path.parent}（{exc}）") from exc
 
     payload = {
+        "engine": "EasyEngine",
+        "author": __author__,
         "version": SAVE_VERSION,
         "script_title": script_title,
         "script_fingerprint": script_fingerprint,

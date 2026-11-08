@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
+from easyengine import __author__
 from easyengine.galgame import GalgameEngine, ScriptError, Transition, parse_story
 from easyengine.galgame.expressions import ExpressionError, evaluate_expression
 from easyengine.galgame.state import GameState, SAVE_VERSION, SaveError, SpriteState
@@ -205,6 +206,11 @@ class EngineHistoryAndSaveTests(unittest.TestCase):
             engine.start()
             engine.save("slot1")
             self.assertEqual(SAVE_VERSION, 2)
+            saved_payload = json.loads(
+                (Path(directory) / "slot1.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(saved_payload["engine"], "EasyEngine")
+            self.assertEqual(saved_payload["author"], __author__)
             loaded = GalgameEngine(self._story(), save_dir=directory)
             loaded.load("slot1")
             nested = loaded.view.variables["nested"]

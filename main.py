@@ -14,10 +14,14 @@ Galgame 核心用法：
 from __future__ import annotations
 
 import argparse
+import logging
+import os
+import sys
 from collections.abc import Callable, Sequence
 from importlib import import_module
 from pathlib import Path
 
+from easyengine import __author__, __github__
 from easyengine.config import ASSETS_DIR, DEMO_SCRIPT, SCRIPTS_DIR
 from easyengine.galgame import (
     EngineError,
@@ -26,6 +30,7 @@ from easyengine.galgame import (
     SaveError,
     ScriptError,
     Story,
+    assets_root_for_story,
     load_script,
 )
 from easyengine.resources import (
@@ -63,9 +68,10 @@ def show_story(
     story: Story,
     *,
     resources: GroupedResources | None = None,
+    assets_root: str | Path | None = None,
 ) -> GalgameEngine:
     """打印剧本摘要和缺失资源，返回已构建的引擎。"""
-    engine = GalgameEngine(story, resources=resources)
+    engine = GalgameEngine(story, assets_root=assets_root, resources=resources)
     print(f"Galgame 剧本：{story.title}")
     print(f"  起始场景：{story.start}，场景数：{len(story.scenes)}")
     if story.characters:
@@ -162,7 +168,7 @@ def run_story(
 
     try:
         return _run_demo(engine)
-    except (EngineError, SaveError) as exc:
+    except (EngineError, SaveError, ScriptError) as exc:
         print(f"演示失败：{exc}")
         return 1
 
@@ -193,7 +199,27 @@ def _story_library(selected: Story) -> tuple[Story, ...]:
     return tuple(stories)
 
 
+def print_banner() -> None:
+    print(
+        "==================================================\n"
+        "  EasyEngine - 极简的 Python Galgame 引擎\n"
+        f"  Author: {__author__}\n"
+        f"  GitHub: {__github__}\n"
+        "  License: MIT\n"
+        "=================================================="
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    print_banner()
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] [%(levelname)s] %(message)s",
+    )
     parser = argparse.ArgumentParser(description="EasyEngine 启动器与 Galgame 核心")
     parser.add_argument("--story", type=Path, help="JSON 剧本路径")
     parser.add_argument("--validate", action="store_true", help="校验剧本并显示摘要")
@@ -243,15 +269,21 @@ def main(argv: Sequence[str] | None = None) -> int:
             )
             return 1
 
+        assets_root = assets_root_for_story(story)
+        story_resources = (
+            resources
+            if assets_root.resolve() == ASSETS_DIR.resolve()
+            else None
+        )
         return run_window(
             story,
-            assets_root=ASSETS_DIR,
-            resources=resources,
+            assets_root=assets_root,
+            resources=story_resources,
             stories=_story_library(story),
         )
 
     if args.story or args.validate or args.demo:
-        return run_story(story_path, demo=args.demo, resources=resources)
+        return run_story(story_path, demo=args.demo)
 
     if DEMO_SCRIPT.is_file():
         try:

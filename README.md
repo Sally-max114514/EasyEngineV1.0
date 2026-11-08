@@ -8,6 +8,8 @@ EasyEngine 是一个纯 Python 的小型 Galgame 引擎，包含核心剧情运�
 
 Galgame 核心仍与界面、音频库解耦：桌面前端只是一个适配器，读取 `GameView` 并响应 `GameEvent`。也可以继续接入终端、Tkinter、Web 或自定义 UI。
 
+项目作者为 [Sally-max114514](https://github.com/Sally-max114514)，按仓库现有 MIT License 开源。MIT 许可允许再分发和商业销售，但必须随副本保留原版权声明与许可证；代码内署名是可见的作者信息，不是防篡改机制。
+
 ### 阅读导航
 
 - 想快速制作和运行剧情：从[快速开始](#1-环境要求与快速开始)和[最小剧本](#5-galgame-最小示例)开始。
@@ -69,7 +71,7 @@ python -m venv .venv
 
 `python main.py` 依次执行：
 
-1. 打印当前时间；
+1. 打印 EasyEngine 作者、GitHub 和许可证 Banner，以及当前时间；
 2. 检查操作系统是否为 `posix` / `nt`，并写入 `config/platform.txt`；
 3. 检查当前工作目录可访问；
 4. 检查 `assets/` 和 `config/` 存在；
@@ -84,6 +86,7 @@ python -m venv .venv
 ```text
 EasyEngineBeta3/
 ├── main.py                         # 启动入口与 CLI
+├── export_game.py                  # 单文件游戏打包脚本
 ├── README.md                       # 本文档
 ├── assets/                         # 所有游戏资源
 │   ├── video/                      # 视频
@@ -117,6 +120,7 @@ EasyEngineBeta3/
 │       ├── state.py                # 运行时状态与存读档
 │       └── text.py                 # 打字机状态
 ├── requirements-ui.txt             # 桌面模式可选依赖
+├── requirements-export.txt         # PyInstaller 游戏打包依赖
 ├── tests/                           # 核心回归测试
 └── saves/                          # 存档目录，保存时自动创建
 ```
@@ -147,6 +151,17 @@ EasyEngineBeta3/
 
 - `0`：成功
 - `1`：自检失败、资源目录异常、剧本校验失败或演示异常
+
+### 3.3 打包为单文件游戏
+
+在项目根目录安装打包依赖并指定剧本：
+
+```bash
+python -m pip install -r requirements-export.txt
+python export_game.py --story assets/text/scripts/demo.json --name "我的游戏"
+```
+
+可使用绝对路径或相对路径指定外部剧本；不传 `--name` 时使用剧本标题。生成的可执行文件和同名 ZIP 位于 `dist/`；ZIP 内含可执行文件及仓库现有 `LICENSE`。Windows 可执行文件还会带有 EasyEngine 产品名与作者信息。打包会把所选剧本放到内置默认入口，并排除其他 `assets/text/scripts/` 剧本；图片和音频仍按原资源相对路径打入程序。游戏构建使用 `--onefile` / `--windowed`，并显式排除 PySide6、PyQt 等编辑器专属依赖。
 
 ---
 
@@ -324,8 +339,9 @@ python main.py --story assets/text/scripts/hello.json --demo
 | `vars` | object | 否 | 初始变量；支持嵌套 JSON 对象、数组和标量 |
 | `scenes` | object | 是 | 场景 id → 场景对象，不能为空 |
 | `gallery` | array | 否 | CG 鉴赏清单；每项声明图片资源及显示信息 |
+| `generator` / `_generator` | string | 否 | 生成器署名元数据；编辑器和打包器会在缺失时写入 `_generator` |
 
-未知顶层字段会直接报错，便于发现拼写错误。
+除生成器元数据外，未知顶层字段会直接报错，便于发现拼写错误。
 
 ### 6.2 角色
 
@@ -590,12 +606,13 @@ from easyengine import GalgameEngine, load_script
 story = load_script("assets/text/scripts/demo.json")
 engine = GalgameEngine(
     story,
-    assets_root="assets",   # 可选，默认项目 assets/
-    save_dir="saves",       # 可选，默认项目 saves/
+    assets_root="assets",   # 可选；默认按剧本文件位置推断
+    save_dir="saves",       # 可选；开发环境默认项目 saves/
 )
 ```
 
-传入相对路径时相对于**当前工作目录**；不传时使用项目内的 `assets/` 和 `saves/`。推荐始终从包含 `main.py` 的项目根目录运行。
+`load_script()` 接受绝对路径和相对于当前工作目录的路径。文件剧本位于项目 `assets/` 下时，引擎会自动找到该资源根目录；其他位置的剧本默认查找其所在目录下的 `assets/`。显式传入 `assets_root` 时以指定目录为准。内存构建的剧本默认使用项目资源目录。
+打包环境的默认存档目录为可执行文件同级的 `saves/`。连续超过 100 次没有产生 `line` 事件的 `goto` / `next` 跳转会抛出 `ScriptError`，并记录当前场景。
 
 也可以先自行扫描资源，避免重复扫描：
 
@@ -617,6 +634,7 @@ engine = GalgameEngine(story, asset_catalog=catalog)
 | `start(scene_id=None)` | `StepResult` | 开始游戏，重置变量、背景、立绘、音乐和剧情位置 |
 | `advance()` | `StepResult` | 文字未显示完时先补全；已完整时进入下一行/场景 |
 | `choose(index)` | `StepResult` | 选择选项，`index` 是 `GameView.choices` 中的原始下标 |
+| `reload_script()` | `StepResult` | 从原 JSON 文件重新加载剧本并重置运行状态 |
 | `tick(count=1)` | `GameView` | 打字机推进 `count` 个字符 |
 | `reveal_all()` | `GameView` | 立即显示当前行全部文字 |
 | `save(slot="quick")` | `Path` | 保存到 `saves/<slot>.json` |
@@ -897,6 +915,34 @@ story = load_script("assets/text/scripts/demo.json")
 run_window(story)
 ```
 
+### 7.9 图形化剧本编辑器
+
+编辑器是位于 `editor/` 的独立可选工具，不修改 Galgame 核心或桌面玩家前端。安装依赖并启动：
+
+```bash
+python3 -m venv .venv
+.venv/bin/python -m pip install -r editor/requirements.txt
+.venv/bin/python editor/main.py
+# 启动时直接打开已有 JSON 剧本
+.venv/bin/python editor/main.py assets/text/scripts/demo.json
+```
+
+Windows 使用 `.venv\Scripts\python.exe`，例如 `py -3 -m venv .venv` 后再安装依赖。
+
+界面采用三栏布局：左侧管理场景/台词/选项，中间编辑剧本属性，右侧通过 `scan_assets()` 浏览资源。资源可以双击或拖入背景、BGM、语音和音效输入框。`goto`、`next`、起始场景均从已有场景 ID 下拉选择；选项 `require` 支持安全表达式或 JSON 条件树。
+
+编辑器首次启动会显示不阻断操作的新手教程，中间表单提供中文标签和悬停提示；之后也可通过“帮助 → 新手教程”重新查看。
+
+通过“工具 → 偏好设置...”或 `Ctrl+,` 可调整主题、字体、自动保存、启动时恢复剧本和默认资源目录；设置会保存在 Qt `QSettings` 中，并在适用时即时生效。
+
+测试和保存都会先写入临时 JSON 并调用 `load_script()`；只有校验通过才会原子保存。校验失败时显示 `ScriptError`，不会覆盖旧文件。安装编辑器依赖后可运行 UI 与模型测试：
+
+```bash
+.venv/bin/python -m unittest discover -s editor/tests -v
+```
+
+更多操作说明见 [editor/README.md](./editor/README.md)。
+
 ---
 
 ## 8. 存读档
@@ -919,6 +965,8 @@ print(engine.list_saves())  # ("slot1",)
 
 ```json
 {
+  "engine": "EasyEngine",
+  "author": "Sally-max114514",
   "version": 2,
   "script_title": "放学后的约定",
   "script_fingerprint": "0000000000000000000000000000000000000000000000000000000000000000",
@@ -1117,7 +1165,7 @@ class GameScreen:
 - 条件表达式是受限的 Python-like 子集，不支持函数调用、任意 Python 代码或自定义脚本函数。
 - 新存档以剧本内容指纹校验；没有指纹的旧版存档只能按标题兼容读取，界面会标记为未验证。
 - 回滚历史仅在当前运行期间保存，不写入存档；存档不记录音频播放位置和界面设置。
-- 桌面端是玩家用的运行界面，不是可视化剧本编辑器；核心资源层只解析路径，图片/音频解码由桌面适配层负责。
+- 桌面端是玩家用的运行界面；独立的可视化剧本编辑器位于 `editor/`。核心资源层只解析路径，图片/音频解码由桌面适配层负责。
 
 ---
 
@@ -1129,7 +1177,7 @@ class GameScreen:
 python3 -m unittest discover -s tests -v
 ```
 
-结果：11 项核心测试全部通过。
+结果：24 项核心与打包测试全部通过。
 
 ```bash
 python3 main.py --story assets/text/scripts/demo.json --validate

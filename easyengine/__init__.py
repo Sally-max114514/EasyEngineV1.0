@@ -1,5 +1,11 @@
 """EasyEngine 核心包：资源扫描、读取、启动自检与 Galgame 引擎。"""
 
+__author__ = "Sally-max114514"
+__github__ = "https://github.com/Sally-max114514/EasyEngineBeta3"
+__github_profile__ = "https://github.com/Sally-max114514"
+__version__ = "1.0.0 (MIT License)"
+__generator__ = f"EasyEngine by {__author__}"
+
 from .galgame import (
     GalgameEngine,
     GameView,
@@ -20,6 +26,11 @@ from .resources import (
 )
 
 __all__ = [
+    "__author__",
+    "__github__",
+    "__github_profile__",
+    "__generator__",
+    "__version__",
     "GalgameEngine",
     "GameView",
     "SaveError",

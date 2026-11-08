@@ -30,10 +30,11 @@ from __future__ import annotations
 import hashlib
 import json
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, Iterator, Mapping, TypeAlias
 
+from .. import __generator__
 from .expressions import (
     ExpressionError,
     evaluate_expression,
@@ -49,7 +50,10 @@ TRANSITION_TYPES: frozenset[str] = frozenset(
 )
 
 _COMPARISON_OPS: frozenset[str] = frozenset({"==", "!=", ">", ">=", "<", "<="})
-_STORY_KEYS = frozenset({"title", "start", "characters", "vars", "scenes", "gallery"})
+_STORY_KEYS = frozenset(
+    {"title", "start", "characters", "vars", "scenes", "gallery", "generator", "_generator"}
+)
+_GENERATOR_KEYS = frozenset({"generator", "_generator"})
 _SCENE_KEYS = frozenset(
     {"background", "bgm", "lines", "next", "end", "transition"}
 )
@@ -241,6 +245,8 @@ class Story:
     variables: Mapping[str, JSONValue]
     gallery: tuple[GalleryEntry, ...] = ()
     fingerprint: str | None = None
+    source_path: Path | None = field(default=None, compare=False, repr=False)
+    generator: str = field(default=__generator__, compare=False, repr=False)
 
     def speaker_name(self, speaker: str | None) -> str | None:
         """把角色 id 解析为显示名；未知 id 原样返回。"""
@@ -274,7 +280,11 @@ class Story:
 
 def load_script(path: str | Path) -> Story:
     """从 JSON 文件加载并校验剧本。"""
-    path = Path(path)
+    path = Path(path).expanduser()
+    try:
+        path = path.resolve()
+    except (OSError, RuntimeError) as exc:
+        raise ScriptError(f"剧本路径无法解析：{path}（{exc}）") from exc
     try:
         with path.open("r", encoding="utf-8") as handle:
             raw = json.load(handle)
@@ -286,7 +296,7 @@ def load_script(path: str | Path) -> Story:
         ) from exc
     except OSError as exc:
         raise ScriptError(f"剧本无法读取：{path}（{exc}）") from exc
-    return parse_story(raw, source=str(path))
+    return replace(parse_story(raw, source=str(path)), source_path=path)
 
 
 def parse_story(raw: Any, *, source: str = "<memory>") -> Story:
@@ -294,6 +304,9 @@ def parse_story(raw: Any, *, source: str = "<memory>") -> Story:
     if not isinstance(raw, dict):
         raise ScriptError(f"{source} 顶层必须是 JSON 对象")
     _check_keys(raw, _STORY_KEYS, source)
+    generator = raw.get("generator", raw.get("_generator", __generator__))
+    if not isinstance(generator, str) or not generator.strip():
+        raise ScriptError(f"{source}.generator 必须是非空字符串")
 
     title = raw.get("title", "未命名剧本")
     if not isinstance(title, str) or not title.strip():
@@ -320,7 +333,7 @@ def parse_story(raw: Any, *, source: str = "<memory>") -> Story:
     _validate_targets(scenes, source)
     try:
         canonical = json.dumps(
-            raw,
+            {key: value for key, value in raw.items() if key not in _GENERATOR_KEYS},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -337,6 +350,7 @@ def parse_story(raw: Any, *, source: str = "<memory>") -> Story:
         variables=variables,
         gallery=gallery,
         fingerprint=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+        generator=generator,
     )
 
 
